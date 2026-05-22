@@ -1228,6 +1228,71 @@ static py_value_t call_function(parser_t *p, const char *name) {
         }
         return py_string(input);
     }
+    if (strcmp(name, "pinMode") == 0) {
+        int pin;
+        int mode;
+        if (argc != 2) {
+            py_error(p->py, "pinMode() expects pin and mode");
+            return py_none();
+        }
+        if (p->py->gpio_mode_callback == NULL) {
+            py_error(p->py, "gpio mode callback not set");
+            return py_none();
+        }
+        pin = read_int_arg(p, args[0], "pinMode() expects integer pin");
+        mode = read_int_arg(p, args[1], "pinMode() expects integer mode");
+        if (py_has_error(p->py)) {
+            return py_none();
+        }
+        if (!p->py->gpio_mode_callback(pin, mode, p->py->gpio_user_data)) {
+            py_error(p->py, "gpio mode failed");
+            return py_none();
+        }
+        return py_none();
+    }
+    if (strcmp(name, "digitalWrite") == 0) {
+        int pin;
+        int value;
+        if (argc != 2) {
+            py_error(p->py, "digitalWrite() expects pin and value");
+            return py_none();
+        }
+        if (p->py->gpio_write_callback == NULL) {
+            py_error(p->py, "gpio write callback not set");
+            return py_none();
+        }
+        pin = read_int_arg(p, args[0], "digitalWrite() expects integer pin");
+        value = read_int_arg(p, args[1], "digitalWrite() expects integer value");
+        if (py_has_error(p->py)) {
+            return py_none();
+        }
+        if (!p->py->gpio_write_callback(pin, value ? 1 : 0, p->py->gpio_user_data)) {
+            py_error(p->py, "gpio write failed");
+            return py_none();
+        }
+        return py_none();
+    }
+    if (strcmp(name, "digitalRead") == 0) {
+        int pin;
+        int value = 0;
+        if (argc != 1) {
+            py_error(p->py, "digitalRead() expects pin");
+            return py_none();
+        }
+        if (p->py->gpio_read_callback == NULL) {
+            py_error(p->py, "gpio read callback not set");
+            return py_none();
+        }
+        pin = read_int_arg(p, args[0], "digitalRead() expects integer pin");
+        if (py_has_error(p->py)) {
+            return py_none();
+        }
+        if (!p->py->gpio_read_callback(pin, &value, p->py->gpio_user_data)) {
+            py_error(p->py, "gpio read failed");
+            return py_none();
+        }
+        return py_int(value ? 1 : 0);
+    }
     if (strcmp(name, "printable") == 0) {
         if (argc != 1) {
             py_error(p->py, "printable() expects one argument");
@@ -2920,6 +2985,10 @@ void py_init(py_t *py) {
         return;
     }
     memset(py, 0, sizeof(*py));
+    py_set_var(py, "LOW", py_int(0));
+    py_set_var(py, "HIGH", py_int(1));
+    py_set_var(py, "INPUT", py_int(0));
+    py_set_var(py, "OUTPUT", py_int(1));
 }
 
 void py_deinit(py_t *py) {
@@ -2953,6 +3022,20 @@ void py_set_input_callback(py_t *py, int (*callback)(char *buffer, size_t buffer
     }
     py->input_callback = callback;
     py->input_user_data = user_data;
+}
+
+void py_set_gpio_callbacks(py_t *py,
+                           int (*mode_callback)(int pin, int mode, void *user_data),
+                           int (*write_callback)(int pin, int value, void *user_data),
+                           int (*read_callback)(int pin, int *value, void *user_data),
+                           void *user_data) {
+    if (py == NULL) {
+        return;
+    }
+    py->gpio_mode_callback = mode_callback;
+    py->gpio_write_callback = write_callback;
+    py->gpio_read_callback = read_callback;
+    py->gpio_user_data = user_data;
 }
 
 static void py_stdio_output(const char *text, void *user_data) {

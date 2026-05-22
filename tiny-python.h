@@ -82,6 +82,10 @@ typedef struct {
     void *output_user_data;
     int (*input_callback)(char *buffer, size_t buffer_size, void *user_data);
     void *input_user_data;
+    int (*gpio_mode_callback)(int pin, int mode, void *user_data);
+    int (*gpio_write_callback)(int pin, int value, void *user_data);
+    int (*gpio_read_callback)(int pin, int *value, void *user_data);
+    void *gpio_user_data;
     py_object_t *objects;
 } py_t;
 
@@ -90,6 +94,7 @@ void py_deinit(py_t *py); // Frees heap-backed lists, tuples, and dictionaries o
 void py_set_output_callback(py_t *py, void (*callback)(const char *text, void *user_data), void *user_data); // Streams print output immediately when callback is not NULL.
 void py_set_input_callback(py_t *py, int (*callback)(char *buffer, size_t buffer_size, void *user_data), void *user_data); // Provides text for input(). Callback returns 1 on success, 0 on failure.
 void py_use_stdio(py_t *py); // Convenience helper: routes print() to stdout and input() to stdin.
+void py_set_gpio_callbacks(py_t *py, int (*mode_callback)(int pin, int mode, void *user_data), int (*write_callback)(int pin, int value, void *user_data), int (*read_callback)(int pin, int *value, void *user_data), void *user_data); // Enables pinMode(), digitalWrite(), and digitalRead().
 int py_run(py_t *py, const char *line, char *output, size_t output_size); //  Runs one line of Python-like code. Good for a REPL or manually running one statement at a time.
 int py_run_source(py_t *py, const char *source, char *output, size_t output_size); // Runs multiple lines from a C string. Variables stay alive between lines.
 int py_run_file(py_t *py, const char *path, char *output, size_t output_size); // Runs a script from a file path, like /spiffs/main.py. You need to mount SPIFFS, LittleFS, or SD first.

@@ -22,12 +22,14 @@ This is not CPython. It is a compact interpreter for running simple scripts on d
 - Comments with `#`
 - Single-line statements and nested indented blocks
 - Builtins: `len`, `int`, `float`, `str`, `bool`, `abs`, `min`, `max`, `pow`, `input`
+- GPIO builtins: `pinMode`, `digitalWrite`, `digitalRead`
 - Additional builtins: `ord`, `chr`, `type`
 - Bitwise operators and shifts
 - `break`, `continue`, and no-op `global`
 - File execution with `py_run_file(...)`
 - One-line stdio setup with `py_use_stdio(...)`
 - Optional real-time output streaming callback
+- Optional GPIO callbacks with `pinMode(...)`, `digitalWrite(...)`, and `digitalRead(...)`
 
 ## Files
 
@@ -116,6 +118,66 @@ void app_main(void) {
 
 Mount SPIFFS, LittleFS, or SD before calling `py_run_file(...)`. The interpreter uses standard `fopen`, so the path must be available through the ESP32 VFS, such as `/spiffs/main.py`.
 
+## GPIO
+
+GPIO support is callback-based so the interpreter still compiles on both desktop and ESP32. After installing GPIO callbacks, Python scripts can use:
+
+```python
+pinMode(2, OUTPUT)
+digitalWrite(2, HIGH)
+print(digitalRead(2))
+```
+
+GPIO constants:
+
+- `LOW` is `0`
+- `HIGH` is `1`
+- `INPUT` is `0`
+- `OUTPUT` is `1`
+
+ESP-IDF callback example:
+
+```c
+#include "driver/gpio.h"
+#include "tiny-python.h"
+
+static int gpio_mode(int pin, int mode, void *user_data) {
+    (void)user_data;
+    gpio_mode_t gpio_mode_value = mode ? GPIO_MODE_OUTPUT : GPIO_MODE_INPUT;
+    return gpio_set_direction((gpio_num_t)pin, gpio_mode_value) == ESP_OK;
+}
+
+static int gpio_write(int pin, int value, void *user_data) {
+    (void)user_data;
+    return gpio_set_level((gpio_num_t)pin, value ? 1 : 0) == ESP_OK;
+}
+
+static int gpio_read(int pin, int *value, void *user_data) {
+    (void)user_data;
+    if (value == NULL) {
+        return 0;
+    }
+    *value = gpio_get_level((gpio_num_t)pin);
+    return 1;
+}
+
+void app_main(void) {
+    py_t py;
+
+    py_init(&py);
+    py_use_stdio(&py);
+    py_set_gpio_callbacks(&py, gpio_mode, gpio_write, gpio_read, NULL);
+
+    if (!py_run_file(&py, "/spiffs/main.py", NULL, 0)) {
+        printf("python error: %s\n", py.error);
+    }
+
+    py_deinit(&py);
+}
+```
+
+If Python code calls `pinMode(...)`, `digitalWrite(...)`, or `digitalRead(...)` without callbacks installed, execution fails with a GPIO callback error.
+
 ## Script Examples
 
 ```python
@@ -198,6 +260,10 @@ print(settings["mode"])
 print(5 / 2)
 print(5 // 2)
 print(float("2.5") * 2)
+
+pinMode(2, OUTPUT)
+digitalWrite(2, HIGH)
+print(digitalRead(2))
 ```
 
 The `x += 1` line matters. Without it, `while x < 5` never becomes false and the script keeps asking for input until the input callback fails or the interpreter loop limit is reached.
@@ -249,6 +315,11 @@ Statements:
 - `print(expression, ..., end=" ")`
 - `input()`
 - `input("prompt")`
+- `pinMode(pin, INPUT)`
+- `pinMode(pin, OUTPUT)`
+- `digitalWrite(pin, LOW)`
+- `digitalWrite(pin, HIGH)`
+- `digitalRead(pin)`
 - `def name(param, ...): statement`
 - `def name(param, ...): indented block`
 - `if expression: statement`
@@ -405,6 +476,17 @@ void py_set_input_callback(py_t *py, int (*callback)(char *buffer, size_t buffer
 Installs the input callback used by Python `input()`. The callback should write a null-terminated string into `buffer` and return `1` on success or `0` on failure.
 
 ```c
+void py_set_gpio_callbacks(
+    py_t *py,
+    int (*mode_callback)(int pin, int mode, void *user_data),
+    int (*write_callback)(int pin, int value, void *user_data),
+    int (*read_callback)(int pin, int *value, void *user_data),
+    void *user_data);
+```
+
+Installs the GPIO callbacks used by `pinMode(...)`, `digitalWrite(...)`, and `digitalRead(...)`.
+
+```c
 int py_run(py_t *py, const char *line, char *output, size_t output_size);
 ```
 
@@ -460,4 +542,4 @@ Additional implementation limits in `tiny-python.c`:
 
 ## License
 
-Add a license before publishing this as a public GitHub repository.
+MIT
