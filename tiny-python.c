@@ -1,4 +1,7 @@
 /*
+Cory Pearl
+05/22/26
+
 Single-file Python-like interpreter for ESP32.
 
 This is a small embedded interpreter, not CPython. It supports simple
@@ -3065,25 +3068,34 @@ void py_use_stdio(py_t *py) {
 }
 
 static py_value_t py_eval_expression(py_t *py, const char *source) {
-    parser_t parser;
+    parser_t *parser;
     py_value_t value;
 
-    memset(&parser, 0, sizeof(parser));
-    parser.py = py;
-    parser.source = source;
-    parser.exec_enabled = 1;
+    parser = calloc(1, sizeof(*parser));
+    if (parser == NULL) {
+        py_error(py, "out of memory");
+        return py_none();
+    }
+
+    parser->py = py;
+    parser->source = source;
+    parser->exec_enabled = 1;
     py->error[0] = '\0';
 
-    if (!lex(&parser)) {
+    if (!lex(parser)) {
+        free(parser);
         return py_none();
     }
-    value = parse_expression(&parser);
+    value = parse_expression(parser);
     if (py_has_error(py)) {
+        free(parser);
         return py_none();
     }
-    if (!expect(&parser, TOK_EOF, "unexpected trailing input")) {
+    if (!expect(parser, TOK_EOF, "unexpected trailing input")) {
+        free(parser);
         return py_none();
     }
+    free(parser);
     return value;
 }
 
@@ -3157,34 +3169,45 @@ static py_value_t py_eval_fstring(parser_t *p, const char *source) {
 }
 
 int py_run(py_t *py, const char *line, char *output, size_t output_size) {
-    parser_t parser;
+    parser_t *parser;
+    int ok;
 
     if (py == NULL || line == NULL) {
         return 0;
     }
 
-    memset(&parser, 0, sizeof(parser));
-    parser.py = py;
-    parser.source = line;
-    parser.output = output;
-    parser.output_size = output_size;
-    parser.exec_enabled = 1;
+    parser = calloc(1, sizeof(*parser));
+    if (parser == NULL) {
+        py_error(py, "out of memory");
+        return 0;
+    }
+
+    parser->py = py;
+    parser->source = line;
+    parser->output = output;
+    parser->output_size = output_size;
+    parser->exec_enabled = 1;
     py->error[0] = '\0';
 
     if (output != NULL && output_size > 0) {
         output[0] = '\0';
     }
 
-    if (!lex(&parser)) {
+    if (!lex(parser)) {
+        free(parser);
         return 0;
     }
-    if (!parse_statement_list(&parser)) {
+    if (!parse_statement_list(parser)) {
+        free(parser);
         return 0;
     }
-    if (!expect(&parser, TOK_EOF, "unexpected trailing input")) {
+    if (!expect(parser, TOK_EOF, "unexpected trailing input")) {
+        free(parser);
         return 0;
     }
-    return !py_has_error(py);
+    ok = !py_has_error(py);
+    free(parser);
+    return ok;
 }
 
 static char *skip_indent(char *line) {

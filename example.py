@@ -1,8 +1,7 @@
-x = 0
-nums = []
-while x < 5:
-    s = input("Enter a number: ")
-    nums.append(s)
-    x += 1
+def fib(n):
+    a, b = 0, 1
+    for _ in range(n):
+        print(a, end=" ")
+        a, b = b, a + b
 
-print(nums)
+fib(10)
