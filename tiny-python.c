@@ -50,8 +50,16 @@ int main(void) {
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+#endif
+
 #ifndef PY_MAX_TOKENS
+#ifdef ESP_PLATFORM
+#define PY_MAX_TOKENS 128
+#else
 #define PY_MAX_TOKENS 512
+#endif
 #endif
 
 #ifndef PY_MAX_LINE
@@ -150,6 +158,8 @@ typedef struct {
     token_type_t type;
     int int_value;
     double float_value;
+    size_t line;
+    size_t col;
     char text[PY_MAX_STRING];
 } token_t;
 
@@ -166,7 +176,28 @@ typedef struct {
     int loop_signal;
 } parser_t;
 
+static parser_t *parser_alloc(void) {
+#ifdef ESP_PLATFORM
+    parser_t *parser = (parser_t *)heap_caps_calloc(1, sizeof(parser_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (parser != NULL) {
+        return parser;
+    }
+#endif
+    return (parser_t *)calloc(1, sizeof(parser_t));
+}
+
 static void py_error(py_t *py, const char *message) {
+    if (py->current_line > 0) {
+        py->error_line = py->current_line;
+        py->error_col = py->current_col;
+        snprintf(py->error, sizeof(py->error), "line %u, col %u: %s",
+                 (unsigned)py->error_line,
+                 (unsigned)py->error_col,
+                 message);
+        return;
+    }
+    py->error_line = 0;
+    py->error_col = 0;
     snprintf(py->error, sizeof(py->error), "%s", message);
 }
 
@@ -587,18 +618,36 @@ static int push_token(parser_t *p, token_t token) {
 
 static int lex(parser_t *p) {
     const char *s = p->source;
+    size_t line = 1;
+    size_t col = 1;
 
     while (*s != '\0' && !py_has_error(p->py)) {
         token_t token;
+        const char *start;
         memset(&token, 0, sizeof(token));
 
         if (isspace((unsigned char)*s)) {
+            if (*s == '\n') {
+                line++;
+                col = 1;
+            } else {
+                col++;
+            }
             s++;
             continue;
         }
         if (*s == '#') {
-            break;
+            while (*s != '\0' && *s != '\n') {
+                s++;
+                col++;
+            }
+            continue;
         }
+        start = s;
+        token.line = line;
+        token.col = col;
+        p->py->current_line = line;
+        p->py->current_col = col;
         if ((s[0] == 'f' || s[0] == 'F') && (s[1] == '"' || s[1] == '\'')) {
             char quote = s[1];
             size_t len = 0;
@@ -630,6 +679,7 @@ static int lex(parser_t *p) {
             if (!push_token(p, token)) {
                 return 0;
             }
+            col += (size_t)(s - start);
             continue;
         }
         if (isdigit((unsigned char)*s)) {
@@ -654,6 +704,7 @@ static int lex(parser_t *p) {
             if (!push_token(p, token)) {
                 return 0;
             }
+            col += (size_t)(end - start);
             s = end;
             continue;
         }
@@ -715,6 +766,7 @@ static int lex(parser_t *p) {
             while (isalnum((unsigned char)*s) || *s == '_') {
                 s++;
             }
+            col += (size_t)(s - start);
             continue;
         }
         if (*s == '"' || *s == '\'') {
@@ -748,6 +800,7 @@ static int lex(parser_t *p) {
             if (!push_token(p, token)) {
                 return 0;
             }
+            col += (size_t)(s - start);
             continue;
         }
 
@@ -896,17 +949,24 @@ static int lex(parser_t *p) {
         if (!push_token(p, token)) {
             return 0;
         }
+        col += (size_t)(s - start);
     }
 
     {
         token_t eof_token;
         memset(&eof_token, 0, sizeof(eof_token));
         eof_token.type = TOK_EOF;
+        eof_token.line = line;
+        eof_token.col = col;
         return push_token(p, eof_token);
     }
 }
 
 static token_t *current(parser_t *p) {
+    if (p->pos < p->token_count) {
+        p->py->current_line = p->tokens[p->pos].line;
+        p->py->current_col = p->tokens[p->pos].col;
+    }
     return &p->tokens[p->pos];
 }
 
@@ -3071,7 +3131,7 @@ static py_value_t py_eval_expression(py_t *py, const char *source) {
     parser_t *parser;
     py_value_t value;
 
-    parser = calloc(1, sizeof(*parser));
+    parser = parser_alloc();
     if (parser == NULL) {
         py_error(py, "out of memory");
         return py_none();
@@ -3176,7 +3236,7 @@ int py_run(py_t *py, const char *line, char *output, size_t output_size) {
         return 0;
     }
 
-    parser = calloc(1, sizeof(*parser));
+    parser = parser_alloc();
     if (parser == NULL) {
         py_error(py, "out of memory");
         return 0;
@@ -3188,6 +3248,10 @@ int py_run(py_t *py, const char *line, char *output, size_t output_size) {
     parser->output_size = output_size;
     parser->exec_enabled = 1;
     py->error[0] = '\0';
+    py->error_line = 0;
+    py->error_col = 0;
+    py->current_line = 0;
+    py->current_col = 0;
 
     if (output != NULL && output_size > 0) {
         output[0] = '\0';
@@ -3263,6 +3327,14 @@ static int append_program_text(py_t *py, char *dest, size_t dest_size, const cha
     return 1;
 }
 
+static char last_non_space(const char *text) {
+    size_t len = strlen(text);
+    while (len > 0 && isspace((unsigned char)text[len - 1])) {
+        len--;
+    }
+    return len == 0 ? '\0' : text[len - 1];
+}
+
 static int append_source_line(py_t *py, char *program, size_t program_size, const char *line, int *indents, int *depth, int *previous_colon) {
     char clean[PY_MAX_LINE];
     char *trimmed;
@@ -3271,6 +3343,9 @@ static int append_source_line(py_t *py, char *program, size_t program_size, cons
 
     trimmed = skip_indent((char *)line);
     if (trimmed[0] == '\0' || trimmed[0] == '#') {
+        if (!append_program_text(py, program, program_size, "\n")) {
+            return 0;
+        }
         return 1;
     }
 
@@ -3284,6 +3359,7 @@ static int append_source_line(py_t *py, char *program, size_t program_size, cons
     }
     if (indent > indents[*depth]) {
         if (!*previous_colon) {
+            py->current_col = (size_t)indent + 1;
             py_error(py, "unexpected indent");
             return 0;
         }
@@ -3291,12 +3367,13 @@ static int append_source_line(py_t *py, char *program, size_t program_size, cons
             py_error(py, "too many nested blocks");
             return 0;
         }
-        if (!append_program_text(py, program, program_size, " {")) {
+        if (!append_program_text(py, program, program_size, " {\n")) {
             return 0;
         }
         (*depth)++;
         indents[*depth] = indent;
     } else if (indent != indents[*depth]) {
+        py->current_col = (size_t)indent + 1;
         py_error(py, "bad indentation");
         return 0;
     }
@@ -3313,13 +3390,13 @@ static int append_source_line(py_t *py, char *program, size_t program_size, cons
     clean[len] = '\0';
 
     if (program[0] != '\0') {
-        char last = program[strlen(program) - 1];
+        char last = last_non_space(program);
         if (last == '{' || continues_if_chain(clean)) {
             if (!append_program_text(py, program, program_size, " ")) {
                 return 0;
             }
         } else {
-            if (!append_program_text(py, program, program_size, "; ")) {
+            if (!append_program_text(py, program, program_size, ";\n")) {
                 return 0;
             }
         }
@@ -3338,6 +3415,7 @@ int py_run_source(py_t *py, const char *source, char *output, size_t output_size
     int depth = 0;
     int previous_colon = 0;
     size_t line_len = 0;
+    size_t source_line = 1;
     const char *s;
 
     if (py == NULL || source == NULL) {
@@ -3348,11 +3426,17 @@ int py_run_source(py_t *py, const char *source, char *output, size_t output_size
     }
 
     py->error[0] = '\0';
+    py->error_line = 0;
+    py->error_col = 0;
+    py->current_line = 0;
+    py->current_col = 0;
     program[0] = '\0';
     indents[0] = 0;
     for (s = source; ; ++s) {
         if (*s == '\n' || *s == '\0') {
             line[line_len] = '\0';
+            py->current_line = source_line;
+            py->current_col = 1;
             if (!append_source_line(py, program, sizeof(program), line, indents, &depth, &previous_colon)) {
                 return 0;
             }
@@ -3361,10 +3445,13 @@ int py_run_source(py_t *py, const char *source, char *output, size_t output_size
             if (*s == '\0') {
                 break;
             }
+            source_line++;
             continue;
         }
 
         if (line_len + 1 >= sizeof(line)) {
+            py->current_line = source_line;
+            py->current_col = line_len + 1;
             py_error(py, "line too long");
             return 0;
         }
@@ -3387,6 +3474,7 @@ int py_run_file(py_t *py, const char *path, char *output, size_t output_size) {
     int indents[16];
     int depth = 0;
     int previous_colon = 0;
+    size_t source_line = 1;
 
     if (py == NULL || path == NULL) {
         return 0;
@@ -3394,6 +3482,11 @@ int py_run_file(py_t *py, const char *path, char *output, size_t output_size) {
     if (output != NULL && output_size > 0) {
         output[0] = '\0';
     }
+    py->error[0] = '\0';
+    py->error_line = 0;
+    py->error_col = 0;
+    py->current_line = 0;
+    py->current_col = 0;
 
     file = fopen(path, "r");
     if (file == NULL) {
@@ -3404,8 +3497,11 @@ int py_run_file(py_t *py, const char *path, char *output, size_t output_size) {
     indents[0] = 0;
 
     while (fgets(line, sizeof(line), file) != NULL) {
+        py->current_line = source_line;
+        py->current_col = 1;
         if (strchr(line, '\n') == NULL && !feof(file)) {
             fclose(file);
+            py->current_col = strlen(line);
             py_error(py, "line too long");
             return 0;
         }
@@ -3413,6 +3509,7 @@ int py_run_file(py_t *py, const char *path, char *output, size_t output_size) {
             fclose(file);
             return 0;
         }
+        source_line++;
     }
 
     while (depth > 0) {

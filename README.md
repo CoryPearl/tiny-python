@@ -30,6 +30,7 @@ This is not CPython. It is a compact interpreter for running simple scripts on d
 - One-line stdio setup with `py_use_stdio(...)`
 - Optional real-time output streaming callback
 - Optional GPIO callbacks with `pinMode(...)`, `digitalWrite(...)`, and `digitalRead(...)`
+- Error messages include line and column information when available
 
 ## Files
 
@@ -443,6 +444,32 @@ py_set_input_callback(&py, serial_in, NULL);
 
 The output callback receives chunks of text exactly as Python prints them. The input callback must write a null-terminated string into `buffer` and return `1` on success or `0` on failure. Newlines from input are stripped by `input(...)`.
 
+## Error Reporting
+
+When a run function fails, it returns `0` and writes the error text into `py.error`.
+
+```c
+if (!py_run_file(&py, "/spiffs/main.py", NULL, 0)) {
+    printf("python error: %s\n", py.error);
+}
+```
+
+Most parser and runtime errors include the source line and column directly in the error string:
+
+```text
+line 2, col 11: expected expression
+line 1, col 9: invalid character
+line 4, col 3: unexpected indent
+```
+
+You can also read the numeric fields:
+
+```c
+printf("line: %u col: %u\n", (unsigned)py.error_line, (unsigned)py.error_col);
+```
+
+`py.error_line` and `py.error_col` are `0` when the error is not tied to a source position, such as `could not open file`.
+
 ## Public API
 
 ```c
@@ -504,7 +531,7 @@ int py_run_file(py_t *py, const char *path, char *output, size_t output_size);
 
 Runs a script file. Variables persist across lines.
 
-On failure, all run functions return `0` and write a message to `py.error`.
+On failure, all run functions return `0`; see the Error Reporting section for `py.error`, `py.error_line`, and `py.error_col`.
 
 ## Configuration
 

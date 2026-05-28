@@ -78,6 +78,10 @@ typedef struct {
     size_t var_count;
     size_t func_count;
     char error[PY_MAX_ERROR];
+    size_t error_line;
+    size_t error_col;
+    size_t current_line;
+    size_t current_col;
     void (*output_callback)(const char *text, void *user_data);
     void *output_user_data;
     int (*input_callback)(char *buffer, size_t buffer_size, void *user_data);
